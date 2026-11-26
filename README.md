@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="../../releases/latest"><b>Download the latest release</b></a>
+  <a href="https://github.com/HonzaKubita/Swiftty/releases/latest"><b>Download the latest release</b></a>
 </p>
 
 <p align="center">
@@ -37,7 +37,7 @@
 
 ## Install
 
-1. Download `Swiftty.zip` from the [latest release](../../releases/latest) and unzip it.
+1. Download `Swiftty.zip` from the [latest release](https://github.com/HonzaKubita/Swiftty/releases/latest) and unzip it.
 2. Move **Swiftty** to your Applications folder.
 3. Open it. Swiftty isn't notarized yet, so the first time macOS will refuse; open **System Settings → Privacy & Security** and click **Open Anyway** (or Control-click the app and choose **Open**).
 
