@@ -78,6 +78,10 @@ Each window holds one Rex session per machine it has tabs on. Closing a window k
 
 To draw its prompt and blocks, Swiftty starts your shell with a small integration script. It's written to `~/.cache/swiftty/shell` on the machine the shell runs on and loads your usual `.zshrc` / `.bashrc` first, so your setup keeps working. Your shell's own prompt is hidden while Swiftty's is shown.
 
+## License
+
+Swiftty is available under the [MIT License](LICENSE).
+
 ## Acknowledgements
 
 Swiftty is an independent project and isn't affiliated with Superlogical.
