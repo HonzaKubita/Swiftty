@@ -8,10 +8,16 @@ cd "$ROOT"
 swift build -c "$CONFIG" --product Swiftty
 BIN="$(swift build -c "$CONFIG" --show-bin-path)"
 APP="$ROOT/build/Swiftty.app"
+VERSION="$(cat "$ROOT/VERSION")"
+# Sparkle compares build numbers: one per commit, always increasing.
+BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/Swiftty" "$APP/Contents/MacOS/Swiftty"
 cp -R "$BIN/Swiftty_Swiftty.bundle" "$APP/Contents/Resources/"
+# Sparkle, for in-app updates.
+mkdir -p "$APP/Contents/Frameworks"
+ditto "$BIN/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
 # App icon: Resources/AppIcon.png (from scripts/make-icon.swift) -> AppIcon.icns.
 ICONSET="$ROOT/build/AppIcon.iconset"
@@ -28,12 +34,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>Swiftty</string>
   <key>CFBundleDisplayName</key><string>Swiftty</string>
-  <key>CFBundleIdentifier</key><string>dev.swiftty.Swiftty</string>
+  <key>CFBundleIdentifier</key><string>io.github.honzakubita.Swiftty</string>
   <key>CFBundleExecutable</key><string>Swiftty</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
+  <key>SUFeedURL</key><string>https://github.com/HonzaKubita/Swiftty/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>aC5iLXvL1aIvQsT6korJy9Y/IPqhU506CcQ4HMbRrzk=</string>
+  <key>SUEnableAutomaticChecks</key><true/>
   <key>LSMinimumSystemVersion</key><string>27.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>

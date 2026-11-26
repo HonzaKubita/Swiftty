@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.model == nil else { return }
         self.model = model
         model.start()
+        _ = Updater.shared
         quick = QuickTerminalController(app: model)
         model.onWindowCountChange = { [weak self] count in self?.updateDockPresence(windowCount: count) }
         #if DEBUG
@@ -121,6 +122,10 @@ struct SwifttyCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
             Button("About Swiftty") { openWindow(id: "about") }
+            if Updater.shared.isAvailable {
+                Button("Check for Updates…") { Updater.shared.checkForUpdates() }
+                    .disabled(!Updater.shared.canCheckForUpdates)
+            }
         }
         CommandGroup(replacing: .newItem) {
             Button("New Window") {

@@ -7,6 +7,10 @@ let package = Package(
     products: [
         .executable(name: "Swiftty", targets: ["Swiftty"]),
     ],
+    dependencies: [
+        // In-app updates from GitHub releases.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
+    ],
     targets: [
         // libghostty-vt, built by scripts/build-ghostty.sh.
         .binaryTarget(
@@ -24,8 +28,10 @@ let package = Package(
         // The app.
         .executableTarget(
             name: "Swiftty",
-            dependencies: ["RexKit", "TerminalKit"],
-            resources: [.copy("ShellIntegration")]
+            dependencies: ["RexKit", "TerminalKit", .product(name: "Sparkle", package: "Sparkle")],
+            resources: [.copy("ShellIntegration")],
+            // Sparkle.framework is embedded in Swiftty.app/Contents/Frameworks.
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .testTarget(name: "RexKitTests", dependencies: ["RexKit"]),
         .testTarget(name: "TerminalKitTests", dependencies: ["TerminalKit"]),

@@ -29,6 +29,11 @@ struct GeneralSettings: View {
             Section("Sessions") {
                 Toggle("Ask before closing a session", isOn: $settings.confirmCloseSession)
             }
+            if Updater.shared.isAvailable {
+                Section("Updates") {
+                    UpdateSettings()
+                }
+            }
             Section("Shell Integration") {
                 LabeledContent("Supported shells", value: "zsh, bash 4.4+")
                 Text("New tabs start your login shell with Swiftty's prompt and command blocks, on this Mac and on remote servers.")
@@ -36,7 +41,7 @@ struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
-        .frame(height: 340)
+        .frame(height: Updater.shared.isAvailable ? 460 : 340)
     }
 }
 
@@ -174,5 +179,26 @@ struct AboutView: View {
         .frame(width: 380)
         .glassEffect(.regular, in: .rect(cornerRadius: 28))
         .padding(12)
+    }
+}
+
+struct UpdateSettings: View {
+    @State private var updater = Updater.shared
+    @State private var checks = Updater.shared.automaticallyChecks
+    @State private var downloads = Updater.shared.automaticallyDownloads
+
+    var body: some View {
+        Toggle("Check for updates automatically", isOn: $checks)
+            .onChange(of: checks) { updater.automaticallyChecks = checks }
+        Toggle("Download and install updates automatically", isOn: $downloads)
+            .onChange(of: downloads) { updater.automaticallyDownloads = downloads }
+            .disabled(!checks)
+        HStack {
+            Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Check Now") { updater.checkForUpdates() }
+                .disabled(!updater.canCheckForUpdates)
+        }
     }
 }

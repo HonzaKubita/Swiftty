@@ -37,11 +37,14 @@
 
 ## Install
 
-1. Download `Swiftty.zip` from the [latest release](https://github.com/HonzaKubita/Swiftty/releases/latest) and unzip it.
-2. Move **Swiftty** to your Applications folder.
-3. Open it. Swiftty isn't notarized yet, so the first time macOS will refuse; open **System Settings → Privacy & Security** and click **Open Anyway** (or Control-click the app and choose **Open**).
+1. Download the zip from the [latest release](https://github.com/HonzaKubita/Swiftty/releases/latest) and unzip it.
+2. Move **Swiftty** to your Applications folder and open it.
 
-On first launch, Swiftty checks whether Rex is installed and walks you through getting started.
+Swiftty is signed and notarized by Apple, so it opens without warnings. On first launch it checks whether Rex is installed and walks you through getting started.
+
+### Updates
+
+Swiftty keeps itself up to date: it checks for new versions automatically and installs them for you. You can also choose **Swiftty → Check for Updates…**, or change how updates work in **Settings → General**.
 
 ## Using Swiftty
 
@@ -87,4 +90,4 @@ Swiftty is available under the [MIT License](LICENSE).
 Swiftty is an independent project and isn't affiliated with Superlogical.
 
 - [Rex](https://www.superlogical.com/rex/docs) by Superlogical runs the sessions.
-- [Ghostty](https://ghostty.org)'s libghostty-vt is the terminal engine. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- [Ghostty](https://ghostty.org)'s libghostty-vt is the terminal engine, and [Sparkle](https://sparkle-project.org) delivers updates. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -8,3 +8,4 @@ xcuserdata/
 # Private notes, not part of the app
 docs/
 .claude/
+dist/
