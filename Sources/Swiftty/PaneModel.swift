@@ -198,7 +198,7 @@ final class PaneModel {
         updateFocus()
         #if DEBUG
         // Restored panes don't take the autorun when only new sessions should.
-        if shellState == .prompt, ProcessInfo.processInfo.environment["SWIFTTY_AUTORUN_NEW_ONLY"] == nil {
+        if shellState == .prompt, ProcessInfo.processInfo.environment["SWIFTTY_AUTORUN_NEW_ONLY"] == nil || blocks.isEmpty {
             DebugAutorun.next(for: self)
         }
         #endif
@@ -470,11 +470,18 @@ enum DebugAutorun {
     static var queue: [String]? = ProcessInfo.processInfo.environment["SWIFTTY_AUTORUN"]?
         .components(separatedBy: ";;").filter { !$0.isEmpty }
     static weak var owner: PaneModel?
+    static var submittedAtBlockCount = -1
 
     static func next(for pane: PaneModel) {
         guard var q = queue, !q.isEmpty else { return }
+        // SWIFTTY_AUTORUN_SESSION pins the commands to one session (by label).
+        if let label = ProcessInfo.processInfo.environment["SWIFTTY_AUTORUN_SESSION"],
+           pane.server?.sessions.first(where: { $0.sessionId == pane.sessionId })?.label != label { return }
         if owner == nil { owner = pane }
         guard owner === pane else { return }
+        // One command at a time: wait until the previous one has finished.
+        guard pane.blocks.count > submittedAtBlockCount else { return }
+        submittedAtBlockCount = pane.blocks.count
         pane.terminalView.window?.makeKeyAndOrderFront(nil)
         let cmd = q.removeFirst()
         queue = q

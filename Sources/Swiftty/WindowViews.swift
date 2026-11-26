@@ -71,7 +71,9 @@ struct SessionWindowView: View {
                 DebugFlags.newSessionDone = true
                 Task {
                     try? await Task.sleep(for: .seconds(2))
-                    app.newSessionWindow(on: app.local) { openWindow(value: $0) }
+                    app.newSessionWindow(on: app.local, label: ProcessInfo.processInfo.environment["SWIFTTY_DEBUG_NEW_SESSION_LABEL"]) {
+                        openWindow(value: $0)
+                    }
                 }
             }
             #endif

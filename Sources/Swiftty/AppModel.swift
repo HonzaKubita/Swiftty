@@ -248,10 +248,10 @@ final class ServerModel: Identifiable {
         }
     }
 
-    func newSession() async -> TabRef? {
+    func newSession(label: String? = nil) async -> TabRef? {
         guard let control else { return nil }
         do {
-            let r = try await control.createSession(shellOptions: ShellIntegration.shellOptions(cwd: isLocal ? NSHomeDirectory() : nil))
+            let r = try await control.createSession(label: label, shellOptions: ShellIntegration.shellOptions(cwd: isLocal ? NSHomeDirectory() : nil))
             await refreshSessions()
             guard let sid = r["session_id"]?.string ?? sessions.last?.sessionId else { return nil }
             await ensureAttached(sid)
@@ -546,10 +546,10 @@ final class AppModel {
     }
 
     /// Start a session on a server in a new window.
-    func newSessionWindow(on server: ServerModel?, open: @escaping (String) -> Void) {
+    func newSessionWindow(on server: ServerModel?, label: String? = nil, open: @escaping (String) -> Void) {
         guard let server else { return }
         Task {
-            if let tab = await server.newSession() {
+            if let tab = await server.newSession(label: label) {
                 let id = UUID().uuidString
                 groups[id] = [SessionRef(serverId: tab.serverId, sessionId: tab.sessionId)]
                 open(id)
