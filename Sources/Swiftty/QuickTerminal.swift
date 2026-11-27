@@ -50,6 +50,8 @@ final class QuickTerminalController {
     private var hotkey: GlobalHotkey?
     private(set) var state: WindowState?
     private var previousApp: NSRunningApplication?
+    private var hideGeneration = 0
+    private var ensureTask: Task<Void, Never>?
 
     init(app: AppModel) {
         self.app = app
@@ -88,7 +90,8 @@ final class QuickTerminalController {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let screen else { return }
-        if !NSApp.isActive { previousApp = NSWorkspace.shared.frontmostApplication }
+        hideGeneration += 1   // a fade-out still in flight must not hide the panel again
+        previousApp = NSApp.isActive ? nil : NSWorkspace.shared.frontmostApplication
         panel.setFrame(screen.frame, display: true)
         panel.alphaValue = 0
         NSApp.activate()
@@ -104,14 +107,18 @@ final class QuickTerminalController {
 
     func hide() {
         guard let panel, panel.isVisible else { return }
+        hideGeneration += 1
+        let generation = hideGeneration
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.14
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
+                guard let self, generation == self.hideGeneration else { return }
                 panel.orderOut(nil)
-                // Give focus back to whatever was in front before, if no Swiftty window wants it.
-                if self?.app.normalWindowCount == 0 { self?.previousApp?.activate() }
+                // Give focus back to the app the hotkey was pressed in.
+                self.previousApp?.activate()
+                self.previousApp = nil
             }
         }
     }
@@ -138,6 +145,15 @@ final class QuickTerminalController {
 
     /// Find the quick session on this Mac (it persists in Rex), or create it.
     private func ensureSession() async {
+        // One at a time: two overlapping runs would each create the session.
+        if let running = ensureTask { return await running.value }
+        let task = Task { await findOrCreateSession() }
+        ensureTask = task
+        await task.value
+        ensureTask = nil
+    }
+
+    private func findOrCreateSession() async {
         guard let local = app.local else { return }
         if local.connection != .connected { await local.connect() }
         if let existing = local.sessions.first(where: { $0.label == AppModel.quickSessionLabel }) {

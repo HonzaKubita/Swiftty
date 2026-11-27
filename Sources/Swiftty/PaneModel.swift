@@ -54,7 +54,8 @@ final class PaneModel {
     private(set) var isAlternateScreen = false
     private(set) var title = ""
     private(set) var cwd = ""
-    private(set) var gitBranch: String?
+    /// What the shell's probes reported before its current prompt (see `ShellReport`).
+    private(set) var shellValues: [String: String] = [:]
     private(set) var preamble = StyledText()
     private(set) var blocks: [CommandBlock] = []
     private(set) var running: CommandRecord?
@@ -67,6 +68,20 @@ final class PaneModel {
     var runningCommand: CommandRecord? { running }
     var lastFinished: CommandBlock? { blocks.last }
 
+    /// The shell's state, as plugins see it.
+    var shell: ShellSnapshot {
+        ShellSnapshot(cwd: cwd, home: shellValues["core.home"] ?? server?.home, isLocal: server?.isLocal ?? true,
+                      lastExitCode: blocks.last?.exitCode, values: shellValues)
+    }
+
+    /// The file system of the machine the shell runs on.
+    var host: ShellHost {
+        guard let server, !server.isLocal else { return .local }
+        return ShellHost(id: server.id, isLocal: false) { [weak self] directory, prefix, limit in
+            await self?.listDir(directory, prefix: prefix, limit: limit)
+        }
+    }
+
     @ObservationIgnored let terminalView: TerminalView
     @ObservationIgnored private(set) var engine: TerminalEngine?
     @ObservationIgnored private(set) weak var server: ServerModel?
@@ -76,6 +91,10 @@ final class PaneModel {
     @ObservationIgnored private var resizeTask: Task<Void, Never>?
     @ObservationIgnored weak var promptView: NSView?
     @ObservationIgnored private var appearanceObservation: NSKeyValueObservation?
+    @ObservationIgnored private var reports = ShellReportScanner()
+    /// True once the shell has reported its own state; until then Swiftty probes for it.
+    @ObservationIgnored private var shellReports = false
+    @ObservationIgnored private var probeTask: Task<Void, Never>?
 
     /// Horizontal space around output: list padding + card padding.
     static let outputInset: CGFloat = 26
@@ -126,6 +145,8 @@ final class PaneModel {
             for try await event in stream.events {
                 handle(event)
             }
+            // The stream ended without the shell exiting: Rex closed it.
+            if status == .live, !Task.isCancelled { status = .failed("Rex closed this terminal's connection.") }
         } catch is CancellationError {
         } catch {
             if !Task.isCancelled { status = .failed(String(describing: error)) }
@@ -145,7 +166,15 @@ final class PaneModel {
                 status = .failed(String(describing: error))
             }
         case .output(let data):
-            engine.write(data)
+            // Take the shell's state reports out first, so the state is current
+            // by the time the prompt mark that follows them is handled.
+            let scanned = reports.feed(data)
+            if let latest = scanned.reports.last {
+                shellReports = true
+                probeTask?.cancel()
+                apply(report: latest)
+            }
+            engine.write(scanned.passthrough)
             let alt = engine.isAlternateScreen
             if alt != isAlternateScreen {
                 isAlternateScreen = alt
@@ -183,9 +212,8 @@ final class PaneModel {
     private func rebuildFromSnapshot() {
         guard let engine, let frame = engine.frame(force: true) else { return }
         isAlternateScreen = engine.isAlternateScreen
-        let sawMarks = frame.rowSemantic.contains { $0 != 0 } || !engine.capturedHistory().commands.isEmpty
-        if sawMarks {
-            let (pre, commands) = engine.capturedHistory()
+        let (pre, commands) = engine.capturedHistory()
+        if frame.rowSemantic.contains(where: { $0 != 0 }) || !commands.isEmpty {
             preamble = pre
             blocks = commands.map { CommandBlock(id: UUID(), command: $0.command, output: $0.output, restored: true) }
             let cursorIndex = frame.cursor.y - frame.firstRow
@@ -195,6 +223,7 @@ final class PaneModel {
         }
         configureTerminalView()
         updateCwd()
+        probeIfSilent()
         updateFocus()
         #if DEBUG
         // Restored panes don't take the autorun when only new sessions should.
@@ -213,6 +242,7 @@ final class PaneModel {
             shellState = .prompt
             running = nil
             updateCwd()
+            probeIfSilent()
             #if DEBUG
             DebugAutorun.next(for: self)
             #endif
@@ -245,12 +275,25 @@ final class PaneModel {
         guard let engine else { return }
         let raw = engine.pwd
         let path = URL(string: raw)?.path(percentEncoded: false) ?? raw
-        guard !path.isEmpty, path != cwd else { return }
-        cwd = path
-        guard server?.isLocal == true else { gitBranch = nil; return }
-        Task { [path] in
-            let branch = await Git.currentBranch(in: path)
-            if self.cwd == path { self.gitBranch = branch }
+        if !path.isEmpty, path != cwd { cwd = path }
+    }
+
+    private func apply(report values: [String: String]) {
+        if values != shellValues { shellValues = values }
+        server?.noteHome(values["core.home"])
+    }
+
+    /// A shell that doesn't report its state (started by an older Swiftty, or one we
+    /// just re-attached to): run the probes ourselves, where we can.
+    private func probeIfSilent() {
+        guard !shellReports, server?.isLocal == true, !cwd.isEmpty else { return }
+        let probes = PluginRegistry.shared.probes
+        let directory = cwd
+        probeTask?.cancel()
+        probeTask = Task { [weak self] in
+            let values = await ShellReport.runLocally(probes: probes, cwd: directory)
+            guard !Task.isCancelled, let self, !self.shellReports, self.cwd == directory else { return }
+            self.apply(report: values)
         }
     }
 
@@ -344,12 +387,13 @@ final class PaneModel {
     }
 
     /// Directory listing on the machine the shell runs on (for completion on remote servers).
-    func listDir(_ path: String, prefix: String) async -> [(name: String, isDir: Bool)]? {
+    func listDir(_ path: String, prefix: String, limit: Int = 300) async -> [DirectoryEntry]? {
         guard let control else { return nil }
-        guard let listing = try? await control.listDir(sessionId: sessionId, blockId: blockId, path: path, prefix: prefix),
+        guard let listing = try? await control.listDir(sessionId: sessionId, blockId: blockId, path: path,
+                                                       prefix: prefix, limit: limit),
               listing.status == nil || listing.status == "ok" else { return nil }
         server?.noteHome(listing.home)
-        return (listing.entries ?? []).map { ($0.name, !($0.file ?? false)) }
+        return (listing.entries ?? []).map { DirectoryEntry(name: $0.name, isDirectory: !($0.file ?? false)) }
     }
 
     /// Run a finished block's command again.
@@ -425,40 +469,6 @@ extension RGB {
         let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
         guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
         self.init(r: UInt8(v >> 16 & 0xff), g: UInt8(v >> 8 & 0xff), b: UInt8(v & 0xff))
-    }
-}
-
-/// Small helpers that shell out to git.
-enum Git {
-    static func currentBranch(in directory: String) async -> String? {
-        await run(["rev-parse", "--abbrev-ref", "HEAD"], in: directory)?.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    static func branches(in directory: String) async -> [String] {
-        let out = await run(["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"], in: directory) ?? ""
-        return out.split(separator: "\n").map(String.init).filter { !$0.hasSuffix("/HEAD") }
-    }
-
-    static func run(_ args: [String], in directory: String) async -> String? {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-                p.arguments = args
-                p.currentDirectoryURL = URL(fileURLWithPath: directory)
-                let out = Pipe()
-                p.standardOutput = out
-                p.standardError = FileHandle.nullDevice
-                do {
-                    try p.run()
-                    let data = out.fileHandleForReading.readDataToEndOfFile()
-                    p.waitUntilExit()
-                    cont.resume(returning: p.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil)
-                } catch {
-                    cont.resume(returning: nil)
-                }
-            }
-        }
     }
 }
 

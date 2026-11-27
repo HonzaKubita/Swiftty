@@ -81,6 +81,15 @@ Each window holds one Rex session per machine it has tabs on. Closing a window k
 
 To draw its prompt and blocks, Swiftty starts your shell with a small integration script. It's written to `~/.cache/swiftty/shell` on the machine the shell runs on and loads your usual `.zshrc` / `.bashrc` first, so your setup keeps working. Your shell's own prompt is hidden while Swiftty's is shown.
 
+## Plugins
+
+Completions and the status pills above the prompt come from plugins: **Git** (current branch, branch and
+remote completion), **Conda** (active environment, environment names for `conda`, `mamba` and `micromamba`),
+and the basics. Switch them on and off in Settings › Plugins.
+
+Want completions or a pill for your favourite tool? A plugin is one small Swift file:
+see [PLUGINS.md](PLUGINS.md).
+
 ## License
 
 Swiftty is available under the [MIT License](LICENSE).

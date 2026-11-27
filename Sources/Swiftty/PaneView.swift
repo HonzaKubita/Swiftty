@@ -42,7 +42,7 @@ struct PaneView: View {
         .onChange(of: pane.usesNativePrompt) { relayout() }
         .onAppear {
             if controller == nil {
-                controller = PromptController(pane: pane, engine: app.completions, history: app.history)
+                controller = PromptController(pane: pane, history: app.history)
             }
             relayout()
             if isFocused { DispatchQueue.main.async { pane.focus() } }
@@ -263,47 +263,54 @@ struct PromptBar: View {
     }
 }
 
-/// Folder, git branch and last exit status above the prompt.
+/// The status pills above the prompt: whatever the enabled plugins have to say
+/// about the shell (folder, git branch, conda environment, last exit status, …).
 struct ContextChips: View {
     let pane: PaneModel
 
     var body: some View {
+        let pills = PluginRegistry.shared.pills(for: pane.shell)
         HStack(spacing: 6) {
-            if !pane.cwd.isEmpty {
-                Chip(symbol: "folder", text: abbreviate(pane.cwd))
-            }
-            if let branch = pane.gitBranch {
-                Chip(symbol: "arrow.triangle.branch", text: branch)
-            }
-            if let last = pane.lastFinished, let code = last.exitCode, code != 0 {
-                Chip(symbol: "xmark.circle", text: "exit \(code)", tint: .red)
+            ForEach(pills) { pill in
+                Chip(pill: pill)
+                    // The folder gives way first when space runs out.
+                    .layoutPriority(pill.id == "core.cwd" ? 0 : 1)
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
             }
             Spacer(minLength: 0)
         }
-        .animation(.snappy, value: pane.cwd)
-        .animation(.snappy, value: pane.gitBranch)
-    }
-
-    private func abbreviate(_ path: String) -> String {
-        let home = NSHomeDirectory()
-        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+        .animation(.snappy, value: pills)
     }
 }
 
 struct Chip: View {
-    let symbol: String
-    let text: String
-    var tint: Color = .secondary
+    let pill: StatusPill
 
     var body: some View {
-        Label(text, systemImage: symbol)
+        Label(pill.text, systemImage: pill.symbol)
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(tint)
+            .foregroundStyle(pill.tint.color)
             .lineLimit(1)
             .truncationMode(.head)
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(.quaternary.opacity(0.6), in: .capsule)
             .contentTransition(.opacity)
+            .help(pill.help ?? pill.text)
+    }
+}
+
+extension StatusPill.Tint {
+    var color: Color {
+        switch self {
+        case .secondary: .secondary
+        case .accent: .accentColor
+        case .red: .red
+        case .orange: .orange
+        case .yellow: .yellow
+        case .green: .green
+        case .blue: .blue
+        case .purple: .purple
+        }
     }
 }
 
@@ -331,7 +338,7 @@ struct RunningRow: View {
 struct CompletionList: View {
     @Bindable var controller: PromptController
 
-    static let width: CGFloat = 300
+    static let width: CGFloat = 340
     static func height(for count: Int) -> CGFloat { min(CGFloat(count) * 26 + 10, 260) }
 
     var body: some View {
@@ -372,9 +379,11 @@ struct CompletionRow: View {
             Text(item.display)
                 .font(.system(size: 12.5, design: .monospaced))
                 .lineLimit(1)
-            Spacer(minLength: 0)
+                .layoutPriority(1)
+            Spacer(minLength: 8)
             if let detail = item.detail {
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(detail).font(.caption).lineLimit(1)
+                    .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.8)) : AnyShapeStyle(.secondary))
             }
         }
         .padding(.horizontal, 8)

@@ -15,7 +15,6 @@ final class PromptController: PromptTextViewDelegate {
 
     @ObservationIgnored weak var textView: PromptTextView?
     @ObservationIgnored private let pane: PaneModel
-    @ObservationIgnored private let engine: CompletionEngine
     @ObservationIgnored private let history: CommandHistory
     @ObservationIgnored private var tokenRange = NSRange(location: 0, length: 0)
     @ObservationIgnored private var completionTask: Task<Void, Never>?
@@ -25,9 +24,8 @@ final class PromptController: PromptTextViewDelegate {
     /// True while a completion is being inserted, so the edit doesn't start its own refresh.
     @ObservationIgnored private var applying = false
 
-    init(pane: PaneModel, engine: CompletionEngine, history: CommandHistory) {
+    init(pane: PaneModel, history: CommandHistory) {
         self.pane = pane
-        self.engine = engine
         self.history = history
     }
 
@@ -124,13 +122,16 @@ final class PromptController: PromptTextViewDelegate {
     func refreshCompletions(selectFirst: Bool = false) {
         guard let view = textView, !dismissedByUser || selectFirst else { return }
         let text = view.string, caret = view.caret
-        let isRemote = pane.server?.isLocal == false
-        let cwd = pane.cwd.isEmpty ? (isRemote ? "~" : NSHomeDirectory()) : pane.cwd
-        let pane = self.pane
-        let lister: CompletionEngine.RemoteLister? = isRemote ? { dir, prefix in await pane.listDir(dir, prefix: prefix) } : nil
+        var shell = pane.shell
+        if shell.cwd.isEmpty { shell.cwd = shell.home ?? (shell.isLocal ? NSHomeDirectory() : "~") }
+        let host = pane.host
+        let engine = PluginRegistry.shared.engine
+        let recent = history.recentCommandNames()
         completionTask?.cancel()
         completionTask = Task {
-            let (ctx, results) = await engine.completions(text: text, caret: caret, cwd: cwd, remote: lister)
+            let result = await engine.completions(text: text, caret: caret, shell: shell, host: host,
+                                                  recentCommands: recent)
+            let results = result.items
             guard !Task.isCancelled else { return }
             // The text moved on while we were listing: list again for what's there now,
             // rather than leaving the old list on screen.
@@ -138,7 +139,7 @@ final class PromptController: PromptTextViewDelegate {
                 refreshCompletions(selectFirst: selectFirst)
                 return
             }
-            tokenRange = ctx.range
+            tokenRange = result.range
             items = results
             selection = selectFirst && !results.isEmpty ? 0 : nil
             caretX = view.caretRect.minX
@@ -177,45 +178,34 @@ final class PromptController: PromptTextViewDelegate {
         selection = nil
     }
 
-    static func commonPrefix(_ strings: [String]) -> String? {
-        guard var prefix = strings.first else { return nil }
-        for s in strings.dropFirst() {
-            while !s.hasPrefix(prefix) { prefix.removeLast() }
-            if prefix.isEmpty { return nil }
-        }
-        return prefix
-    }
 }
 
 #if DEBUG
 extension PromptController {
-    /// SWIFTTY_DEBUG_COMPLETE=1: type "cd projects/", Tab, Enter, logging the list after each step.
+    /// SWIFTTY_DEBUG_COMPLETE="git switch ;;cd ~/": type each text into the prompt and log the
+    /// completion list to stderr. Nothing is run. SWIFTTY_AUTORUN_SESSION pins it to one session.
     func runDebugCompletionScript() {
-        guard ProcessInfo.processInfo.environment["SWIFTTY_DEBUG_COMPLETE"] != nil, let v = textView else { return }
-        func log(_ step: String) {
-            let names = items.prefix(4).map(\.display).joined(separator: ",")
-            let line = "COMPLETE \(step): text=\(v.string) caret=\(v.caret) showing=\(isShowingCompletions) sel=\(selection.map(String.init) ?? "nil") items=[\(names)]\n"
-            FileHandle.standardError.write(Data(line.utf8))
-        }
-        func key(_ code: UInt16, _ chars: String) {
-            let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-                                     windowNumber: v.window?.windowNumber ?? 0, context: nil,
-                                     characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)!
-            v.keyDown(with: e)
-        }
+        let env = ProcessInfo.processInfo.environment
+        guard let script = env["SWIFTTY_DEBUG_COMPLETE"], let v = textView else { return }
+        if let label = env["SWIFTTY_AUTORUN_SESSION"],
+           pane.server?.sessions.first(where: { $0.sessionId == pane.sessionId })?.label != label { return }
         Task {
-            try? await Task.sleep(for: .seconds(3))
-            for ch in "cd projects/" {
-                v.insertText(String(ch), replacementRange: v.selectedRange())
-                try? await Task.sleep(for: .milliseconds(15))
+            try? await Task.sleep(for: .seconds(4))
+            for text in script.components(separatedBy: ";;") where !text.isEmpty {
+                v.text = ""
+                for ch in text {
+                    v.insertText(String(ch), replacementRange: v.selectedRange())
+                    try? await Task.sleep(for: .milliseconds(10))
+                }
+                try? await Task.sleep(for: .milliseconds(400))
+                let names = items.prefix(8).map { $0.display + ($0.detail.map { " (\($0))" } ?? "") }.joined(separator: ", ")
+                let line = "COMPLETE \"\(text)\" showing=\(isShowingCompletions) sel=\(selection.map(String.init) ?? "nil") items=[\(names)]\n"
+                FileHandle.standardError.write(Data(line.utf8))
             }
-            log("typed")
-            for _ in 0..<4 { key(0x30, "\t"); try? await Task.sleep(for: .milliseconds(20)) }
-            log("tab x4")
-            key(0x24, "\r")
-            try? await Task.sleep(for: .milliseconds(150)); log("enter+150ms")
-            try? await Task.sleep(for: .milliseconds(800)); log("enter+950ms")
-            v.text = ""
+            if env["SWIFTTY_DEBUG_COMPLETE_KEEP"] == nil {
+                v.text = ""
+                dismiss()
+            }
         }
     }
 }

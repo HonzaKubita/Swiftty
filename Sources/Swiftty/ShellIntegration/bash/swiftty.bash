@@ -33,6 +33,9 @@ _swiftty_urlencode() {
   printf '%s' "$out"
 }
 
+# _swiftty_report: prints the state Swiftty's plugins ask for (git branch, …).
+[ -r "$SWIFTTY_INTEGRATION_DIR/report.sh" ] && . "$SWIFTTY_INTEGRATION_DIR/report.sh"
+
 _swiftty_save_ret() { _swiftty_ret=$?; }
 
 _swiftty_prompt() {
@@ -44,6 +47,7 @@ _swiftty_prompt() {
   fi
   _swiftty_last_hist="$h"
   printf '\e]7;file://%s%s\a' "$HOSTNAME" "$(_swiftty_urlencode "$PWD")"
+  declare -F _swiftty_report >/dev/null && _swiftty_report
   PS1='\[\e]133;A\a\]\[\e]133;B\a\]'
   PS2='\[\e]133;A;k=s\a\]\[\e]133;B\a\]'
 }

@@ -43,8 +43,8 @@ final class Updater {
         let controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         self.controller = controller
         canCheckForUpdates = controller.updater.canCheckForUpdates
-        observations.append(controller.updater.observe(\.canCheckForUpdates, options: [.new]) { [weak self] updater, _ in
-            let can = updater.canCheckForUpdates
+        observations.append(controller.updater.observe(\.canCheckForUpdates, options: [.new]) { [weak self] _, change in
+            guard let can = change.newValue else { return }
             Task { @MainActor in self?.canCheckForUpdates = can }
         })
     }

@@ -76,6 +76,8 @@ final class PromptTextView: NSTextView {
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
+        // While an input method is composing, Return, arrows, Tab and Escape belong to it.
+        if hasMarkedText() { super.keyDown(with: event); return }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let plain = flags.subtracting([.numericPad, .function, .capsLock]).isEmpty
         switch event.keyCode {

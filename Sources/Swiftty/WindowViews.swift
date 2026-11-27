@@ -53,6 +53,7 @@ struct SessionWindowView: View {
             if state == nil { state = WindowState(app: app) }
             state?.groupId = groupId
             claimIfNeeded()
+            register()
             if !app.settings.onboardingDone, app.normalWindowCount == 0 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showingWelcome = true }
             }
@@ -271,6 +272,7 @@ struct RenameField: View {
     let placeholder: String
     let done: (String?) -> Void
     @State private var text = ""
+    @State private var finished = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -280,9 +282,16 @@ struct RenameField: View {
             .multilineTextAlignment(.center)
             .focused($focused)
             .onAppear { text = initial; focused = true }
-            .onSubmit { done(text) }
-            .onExitCommand { done(nil) }
-            .onChange(of: focused) { if !focused { done(text) } }
+            .onSubmit { finish(text) }
+            .onExitCommand { finish(nil) }
+            .onChange(of: focused) { if !focused { finish(text) } }
+    }
+
+    /// Return also takes focus away: report once.
+    private func finish(_ name: String?) {
+        guard !finished else { return }
+        finished = true
+        done(name)
     }
 }
 
@@ -658,6 +667,8 @@ struct BlockView: View {
         let block = server.views[sessionId]?.windows.flatMap(\.allBlocks).first { $0.blockId == blockId }
         if block?.isTerminal ?? true {
             PaneView(pane: server.pane(sessionId: sessionId, blockId: blockId), isFocused: focused)
+                // A new connection means new panes: don't keep showing the old one.
+                .id("\(blockId)#\(server.connectionEpoch)")
         } else {
             ContentUnavailableView(block?.label ?? "Block", systemImage: "square.dashed",
                                    description: Text("Swiftty doesn't show \(block?.flavor ?? "this kind of") block yet."))

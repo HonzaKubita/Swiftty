@@ -18,11 +18,13 @@ enum ShellIntegration {
         return data.base64EncodedString()
     }
 
-    /// The launcher script, with the integration files embedded.
-    static let launcher: String = {
-        let zsh = resource("swiftty.zsh")
-        let zshenv = resource("zsh/.zshenv")
-        let bash = resource("bash/swiftty.bash")
+    private static let zsh = resource("swiftty.zsh")
+    private static let zshenv = resource("zsh/.zshenv")
+    private static let bash = resource("bash/swiftty.bash")
+
+    /// The launcher script, with the integration files and the plugins' probes embedded.
+    static func launcher(probes: [ShellProbe]) -> String {
+        let report = Data(ShellReport.script(probes: probes).utf8).base64EncodedString()
         return """
         d="${XDG_CACHE_HOME:-$HOME/.cache}/swiftty/shell"
         mkdir -p "$d/zsh" "$d/bash" 2>/dev/null
@@ -30,16 +32,18 @@ enum ShellIntegration {
         printf %s '\(zsh)' | dec > "$d/swiftty.zsh"
         printf %s '\(zshenv)' | dec > "$d/zsh/.zshenv"
         printf %s '\(bash)' | dec > "$d/bash/swiftty.bash"
+        printf %s '\(report)' | dec > "$d/report.sh"
         s="$SHELL"
         if [ -z "$s" ]; then
           s=$(dscl . -read "/Users/$(id -un)" UserShell 2>/dev/null | awk '{print $2}')
           [ -z "$s" ] && s=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)
           [ -z "$s" ] && s=/bin/sh
         fi
+        export SWIFTTY_INTEGRATION_DIR="$d"
         case "$s" in
           */zsh)
             if [ -n "${ZDOTDIR+x}" ]; then export SWIFTTY_ORIG_ZDOTDIR="$ZDOTDIR"; fi
-            export ZDOTDIR="$d/zsh" SWIFTTY_INTEGRATION_DIR="$d"
+            export ZDOTDIR="$d/zsh"
             exec "$s" -l ;;
           */bash)
             exec "$s" --rcfile "$d/bash/swiftty.bash" -i ;;
@@ -47,21 +51,16 @@ enum ShellIntegration {
             exec "$s" -l ;;
         esac
         """
-    }()
+    }
 
     /// Options for `com.superlogical.terminal.shell`.
+    @MainActor
     static func shellOptions(cwd: String?) -> JSONValue {
         var options: [String: JSONValue] = [
             "shell": "none",
-            "command": ["/bin/sh", "-c", .string(launcher)],
+            "command": ["/bin/sh", "-c", .string(launcher(probes: PluginRegistry.shared.probes))],
         ]
         if let cwd, !cwd.isEmpty { options["cwd"] = .string(cwd) }
         return .object(options)
-    }
-
-    /// The user's login shell on this Mac.
-    static var userShell: String {
-        if let pw = getpwuid(getuid()), let shell = pw.pointee.pw_shell { return String(cString: shell) }
-        return ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
     }
 }

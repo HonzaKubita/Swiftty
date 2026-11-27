@@ -20,7 +20,8 @@ public enum RexEndpoint: Sendable, Hashable, Codable, CustomStringConvertible {
         if t.hasPrefix("ssh://") {
             var rest = String(t.dropFirst("ssh://".count))
             if let slash = rest.firstIndex(of: "/") { rest = String(rest[..<slash]) }
-            guard !rest.isEmpty else { return nil }
+            // Never something ssh would read as an option, or more than one argument.
+            guard !rest.isEmpty, !rest.hasPrefix("-"), !rest.contains(where: \.isWhitespace) else { return nil }
             self = .ssh(destination: rest)
         } else if t.hasPrefix("unix://") {
             let path = String(t.dropFirst("unix://".count)).removingPercentEncoding ?? String(t.dropFirst("unix://".count))
@@ -143,7 +144,8 @@ final class RexTransport: @unchecked Sendable {
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
             "-o", "ControlMaster=auto", "-o", "ControlPath=\(caches.path)/ssh-%C", "-o", "ControlPersist=120",
             "-o", "ServerAliveInterval=30",
-            destination,
+            // The URI form carries a port ("user@host:2222"); "--" ends ssh's options.
+            "--", "ssh://" + destination,
             // Find rex the way an interactive login would, then bridge to its server.
             #"sh -lc 'R=$(command -v rex || echo "$HOME/.local/bin/rex"); exec "$R" __internal dial-stdio'"#,
         ])

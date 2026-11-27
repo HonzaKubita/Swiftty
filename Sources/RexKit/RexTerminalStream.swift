@@ -31,6 +31,7 @@ public struct RexStreamParser: Sendable {
     private var snapshot: Data?     // collecting a snapshot
     private var carry = Data()      // undecided bytes (partial APC)
     private var atStreamStart = true
+    private var startCarry = Data() // first bytes, before we know whether a snapshot follows
 
     public init(nonce: UInt64) { self.nonce = nonce }
 
@@ -40,14 +41,15 @@ public struct RexStreamParser: Sendable {
         var input = chunk
 
         if atStreamStart || snapshot != nil {
-            var pending = (snapshot ?? Data()) + input
+            var pending = (snapshot ?? startCarry) + input
             if snapshot == nil {
                 // A stream starts with a snapshot when it begins with the magic.
-                if pending.count < Self.snapshotMagic.count,
-                   Self.snapshotMagic.starts(with: pending) {
-                    snapshot = pending
+                // Too few bytes to tell yet: wait for more.
+                if pending.count < Self.snapshotMagic.count, Self.snapshotMagic.starts(with: pending) {
+                    startCarry = pending
                     return events
                 }
+                startCarry = Data()
                 guard pending.starts(with: Self.snapshotMagic) else {
                     atStreamStart = false
                     return events + feedLive(pending)
@@ -73,6 +75,7 @@ public struct RexStreamParser: Sendable {
         self.nonce = nonce
         snapshot = nil
         carry = Data()
+        startCarry = Data()
         atStreamStart = true
     }
 
@@ -211,7 +214,10 @@ public final class RexTerminalStream: @unchecked Sendable {
     }
 
     public func close() {
-        lock.withLock { cancelled = true }
+        let (task, socket) = lock.withLock { () -> (Task<Void, Never>?, UnixWebSocket?) in
+            cancelled = true
+            return (self.task, self.socket)
+        }
         task?.cancel()
         socket?.close()
         continuation.finish()
@@ -254,8 +260,10 @@ public final class RexTerminalStream: @unchecked Sendable {
     }
 
     private func start(ws: UnixWebSocket, first: [Data]) {
-        socket = ws
-        task = Task.detached { [weak self] in
+        lock.withLock { socket = ws }
+        // Nobody listening any more (the pane went away): let go of the connection.
+        continuation.onTermination = { [weak self] _ in self?.close() }
+        let task = Task.detached { [weak self] in
             var ws = ws
             while let self {
                 do {
@@ -277,11 +285,18 @@ public final class RexTerminalStream: @unchecked Sendable {
                         self.continuation.finish(throwing: error)
                         return
                     }
+                    // Closed while reconnecting: don't keep the new connection.
+                    let closed = self.lock.withLock { () -> Bool in
+                        if self.cancelled { return true }
+                        self.socket = resumed
+                        return false
+                    }
+                    if closed { resumed.close(); return }
                     ws = resumed
-                    self.socket = resumed
                 }
             }
         }
+        lock.withLock { self.task = task }
     }
 
     private func resume() async -> UnixWebSocket? {
@@ -291,7 +306,11 @@ public final class RexTerminalStream: @unchecked Sendable {
         while Date() < deadline, !lock.withLock({ cancelled }) {
             var msg = Data([0x02]) + tok
             withUnsafeBytes(of: count.littleEndian) { msg.append(contentsOf: $0) }
-            if let (ws, _) = try? await handshake(msg) { return ws }
+            do {
+                return try await handshake(msg).0
+            } catch Failure.rejected {
+                return nil   // Rex won't take this stream back; retrying can't help
+            } catch {}
             try? await Task.sleep(nanoseconds: delay)
             delay = min(delay * 2, 2_000_000_000)
         }

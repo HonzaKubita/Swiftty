@@ -12,6 +12,9 @@ export TERM_PROGRAM=Swiftty
 
 typeset -g _swiftty_running=0
 
+# _swiftty_report: prints the state Swiftty's plugins ask for (git branch, …).
+[[ -r "$SWIFTTY_INTEGRATION_DIR/report.sh" ]] && source "$SWIFTTY_INTEGRATION_DIR/report.sh"
+
 _swiftty_urlencode() {
   emulate -L zsh
   local LC_ALL=C s="$1" out="" c i
@@ -34,6 +37,7 @@ _swiftty_precmd() {
     print
   fi
   print -n "\e]7;file://${HOST}$(_swiftty_urlencode "$PWD")\a"
+  (( $+functions[_swiftty_report] )) && _swiftty_report
   # Hide the shell's prompt; keep only the marks. Re-applied every time,
   # after prompt themes have run, so it wins.
   PROMPT=$'%{\e]133;A\a%}%{\e]133;B\a%}'

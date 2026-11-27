@@ -176,6 +176,7 @@ extension RexControl {
         ])
     }
 
+    @discardableResult
     public func blockMethod(sessionId: String, blockId: String, _ method: String, _ args: JSONValue = [:]) async throws -> JSONValue {
         try await call("block.method", [
             "session_id": .string(sessionId),
@@ -269,9 +270,10 @@ extension RexControl {
     }
 
     /// List a directory on the terminal's machine (for path completion on remote servers).
-    public func listDir(sessionId: String, blockId: String, path: String, prefix: String) async throws -> RexDirListing {
+    public func listDir(sessionId: String, blockId: String, path: String, prefix: String,
+                        limit: Int = 300) async throws -> RexDirListing {
         try await blockMethod(sessionId: sessionId, blockId: blockId, "list_dir", [
-            "path": .string(path), "prefix": .string(prefix), "files": true, "limit": 300,
+            "path": .string(path), "prefix": .string(prefix), "files": true, "limit": .int(Int64(limit)),
         ]).decode(RexDirListing.self)
     }
 

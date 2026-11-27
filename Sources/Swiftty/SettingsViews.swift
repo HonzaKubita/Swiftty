@@ -8,6 +8,7 @@ struct SettingsView: View {
         TabView {
             Tab("General", systemImage: "gearshape") { GeneralSettings() }
             Tab("Quick Terminal", systemImage: "rectangle.inset.filled.on.rectangle") { QuickTerminalSettings() }
+            Tab("Plugins", systemImage: "puzzlepiece.extension") { PluginsSettings() }
             Tab("Servers", systemImage: "server.rack") { ServersSettings() }
         }
         .frame(width: 520)
@@ -105,6 +106,36 @@ struct HotkeyRecorder: View {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         (NSApp.delegate as? AppDelegate)?.quick?.suspendHotkey(false)
+    }
+}
+
+/// Which plugins contribute completions and status pills.
+struct PluginsSettings: View {
+    @State private var registry = PluginRegistry.shared
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(PluginRegistry.all, id: \.id) { plugin in
+                    Toggle(isOn: Binding(get: { registry.isEnabled(plugin) }, set: { registry.setEnabled(plugin, $0) })) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(plugin.name)
+                                Text(plugin.summary).font(.caption).foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: plugin.symbol)
+                        }
+                    }
+                    .disabled(plugin.id == CorePlugin.id)
+                }
+            } footer: {
+                Text("Plugins add completions and the status pills above the prompt. Pills that read the shell's state (git branch, conda environment) follow a change in new tabs.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(height: 340)
     }
 }
 

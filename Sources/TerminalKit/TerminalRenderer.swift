@@ -41,6 +41,7 @@ final class TerminalRenderer {
     let queue: MTLCommandQueue
     let pipeline: MTLRenderPipelineState
     var atlas: GlyphAtlas
+    private var atlasGeneration = 0
 
     /// Padding around the grid, in pixels.
     var padding = SIMD2<Float>(0, 0)
@@ -89,7 +90,14 @@ final class TerminalRenderer {
         pass.colorAttachments[0].clearColor = clear
         pass.colorAttachments[0].loadAction = .clear
 
-        let instances = buildInstances(frame)
+        var instances = buildInstances(frame)
+        // The glyph atlas filled up and started over while building: glyphs placed
+        // before that point at stale texture regions, so build once more.
+        if atlas.generation != atlasGeneration {
+            atlasGeneration = atlas.generation
+            instances = buildInstances(frame)
+            atlasGeneration = atlas.generation
+        }
         guard let cmd = queue.makeCommandBuffer(), let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         if !instances.isEmpty {
             let bytes = instances.count * MemoryLayout<Instance>.stride

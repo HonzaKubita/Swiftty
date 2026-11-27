@@ -35,5 +35,6 @@ let package = Package(
         ),
         .testTarget(name: "RexKitTests", dependencies: ["RexKit"]),
         .testTarget(name: "TerminalKitTests", dependencies: ["TerminalKit"]),
+        .testTarget(name: "SwifttyTests", dependencies: ["Swiftty"]),
     ]
 )

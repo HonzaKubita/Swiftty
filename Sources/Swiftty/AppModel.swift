@@ -42,6 +42,10 @@ final class ServerModel: Identifiable {
     @ObservationIgnored private var refreshTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
+    /// Bumped by every connect and disconnect, so a superseded attempt can tell it lost.
+    @ObservationIgnored private var attempt = 0
+    /// Changes with every new connection; views key their panes on it so they pick up fresh ones.
+    private(set) var connectionEpoch = 0
 
     static let localId = "local"
 
@@ -67,8 +71,15 @@ final class ServerModel: Identifiable {
     // MARK: Connecting
 
     func connect() async {
-        guard connection != .connecting else { return }
+        guard connection != .connecting, connection != .connected else { return }
         connection = .connecting
+        attempt += 1
+        let attempt = attempt
+        eventTask?.cancel()
+        if let old = control {
+            control = nil
+            await old.disconnect()
+        }
         if isLocal, !RexServerLauncher.isRunning(address) {
             if RexServerLauncher.findExecutable() == nil {
                 connection = .failed(String(describing: RexServerLauncher.Failure.notInstalled))
@@ -84,9 +95,12 @@ final class ServerModel: Identifiable {
         let control = RexControl(address: address, client: RexClientInfo(label: Host.current().localizedName ?? "Mac"))
         do {
             try await control.connect()
+            // Disconnected or removed while connecting: this attempt is void.
+            guard attempt == self.attempt else { await control.disconnect(); return }
             self.control = control
             let boot = try await control.bootstrap()
             sessions = boot.attachAll?.sessions ?? []
+            attached.removeAll()
             if let view = boot.selectedSession?.view {
                 views[view.sessionId] = view
                 attached.insert(view.sessionId)
@@ -98,28 +112,63 @@ final class ServerModel: Identifiable {
                 await refreshSessions()
                 primarySessionId = created["session_id"]?.string ?? sessions.first?.sessionId
             }
+            guard attempt == self.attempt else { await control.disconnect(); return }
             connection = .connected
+            connectionEpoch += 1
             eventTask = Task { [weak self] in
-                for await event in control.events { self?.handle(event) }
+                for await event in control.events {
+                    // Events from a connection that has been replaced are stale.
+                    guard let self, self.control === control else { return }
+                    self.handle(event)
+                }
             }
-            for s in sessions where views[s.sessionId] == nil { await refreshView(s.sessionId) }
+            // Views kept from before a reconnect may be out of date: refresh them all.
+            let known = Set(sessions.map(\.sessionId))
+            for id in views.keys where !known.contains(id) { views[id] = nil }
+            for s in sessions where s.sessionId != boot.selectedSession?.view?.sessionId { await refreshView(s.sessionId) }
             app?.validateSelection()
+            if isLocal { await app?.loadHosts() }
         } catch {
+            guard attempt == self.attempt else { return }
+            if self.control === control { self.control = nil }
+            await control.disconnect()
             connection = .failed(String(describing: error))
         }
     }
 
     func disconnect() {
+        attempt += 1
         reconnectTask?.cancel()
         eventTask?.cancel()
-        for p in panes.values { p.stop() }
-        panes.removeAll()
-        Task { await control?.disconnect() }
+        dropPanes()
+        let old = control
         control = nil
         connection = .idle
+        Task { await old?.disconnect() }
+    }
+
+    private func dropPanes() {
+        for p in panes.values { p.stop() }
+        panes.removeAll()
+        attached.removeAll()
+    }
+
+    /// Keep trying to get the connection back, waiting longer each time.
+    private func scheduleReconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = Task { [weak self] in
+            var delay = 2.0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled, let self, self.connection != .connected else { return }
+                await self.connect()
+                delay = min(delay * 2, 30)
+            }
+        }
     }
 
     func retry() {
+        reconnectTask?.cancel()
         Task { await connect() }
     }
 
@@ -127,15 +176,10 @@ final class ServerModel: Identifiable {
         switch event.type {
         case "swiftty_disconnected":
             connection = .failed("Lost the connection to \(name)")
-            for p in panes.values { p.stop() }
-            panes.removeAll()
-            attached.removeAll()
+            eventTask?.cancel()
+            dropPanes()
             control = nil
-            reconnectTask = Task {
-                try? await Task.sleep(for: .seconds(isLocal ? 2 : 5))
-                guard !Task.isCancelled else { return }
-                await connect()
-            }
+            scheduleReconnect()
         case "session_created", "session_destroyed", "session_moved":
             Task { await refreshSessions() }
         case "session_event":
@@ -211,10 +255,12 @@ final class ServerModel: Identifiable {
     func pane(sessionId: String, blockId: String) -> PaneModel {
         if let p = panes[blockId] { return p }
         let p = PaneModel(sessionId: sessionId, blockId: blockId, server: self)
+        // While disconnected the pane is a placeholder: the next connection makes a real one.
+        guard control != nil else { return p }
         panes[blockId] = p
         Task {
             await ensureAttached(sessionId)
-            p.start()
+            if panes[blockId] === p { p.start() }
         }
         return p
     }
@@ -223,12 +269,16 @@ final class ServerModel: Identifiable {
 
     func ensureAttached(_ sessionId: String) async {
         guard !attached.contains(sessionId), let control else { return }
-        try? await control.attach(sessionId: sessionId)
         attached.insert(sessionId)
+        do {
+            try await control.attach(sessionId: sessionId)
+        } catch {
+            attached.remove(sessionId)
+        }
     }
 
     func noteHome(_ path: String?) {
-        if let path, !path.isEmpty, home == nil { home = path }
+        if let path, !path.isEmpty, home != path { home = path }
     }
 
     // MARK: Actions
@@ -332,7 +382,6 @@ final class AppModel {
     private(set) var groups: [String: [SessionRef]] = [:] { didSet { saveGroups() } }
 
     let history = CommandHistory()
-    let completions: CompletionEngine
     let settings = AppSettings.shared
 
     @ObservationIgnored private var started = false
@@ -351,7 +400,6 @@ final class AppModel {
     var local: ServerModel? { servers.first { $0.isLocal } }
 
     init() {
-        completions = CompletionEngine(history: history)
         if let data = UserDefaults.standard.data(forKey: "windowGroups"),
            let saved = try? JSONDecoder().decode([String: [SessionRef]].self, from: data) {
             groups = saved
@@ -407,7 +455,12 @@ final class AppModel {
     /// when Rex runs on this Mac.
     func loadHosts() async {
         var hosts = savedServers.map { RexHost(id: $0.id, label: $0.label, endpoints: [$0.address]) }
-        if let control = local?.control, let rexHosts = try? await control.listHosts() { hosts += rexHosts }
+        // Without Rex's list (not connected yet), nothing can be said about which of its hosts are gone.
+        var haveRexList = false
+        if let control = local?.control, let rexHosts = try? await control.listHosts() {
+            hosts += rexHosts
+            haveRexList = true
+        }
         var seen = Set<String>()
         var wanted: [String: (RexHost, RexEndpoint)] = [:]
         for host in hosts {
@@ -420,7 +473,9 @@ final class AppModel {
             servers.append(s)
             Task { await s.connect() }
         }
-        for s in servers where !s.isLocal && wanted[s.id] == nil { removeServerLocally(s) }
+        for s in servers where !s.isLocal && wanted[s.id] == nil && (haveRexList || s.id.hasPrefix("saved:")) {
+            removeServerLocally(s)
+        }
     }
 
     func addHost(label: String, address: String) async throws {
@@ -435,6 +490,12 @@ final class AppModel {
         let endpoint = server.address.endpoint.description
         savedServers.removeAll { $0.id == server.id || RexEndpoint($0.address)?.description == endpoint }
         removeServerLocally(server)
+        // Its tabs go with it; a window left with nothing closes.
+        for (id, refs) in groups where refs.contains(where: { $0.serverId == server.id }) {
+            let rest = refs.filter { $0.serverId != server.id }
+            groups[id] = rest.isEmpty ? nil : rest
+            if rest.isEmpty { windows[id]?.window?.close() }
+        }
         guard let control = local?.control else { return }
         Task {
             // Remove it from Rex's list as well, wherever it matches.
@@ -603,16 +664,15 @@ final class AppModel {
     /// What a tab is called: its custom name, else the running command, the folder, or the title.
     func tabTitle(_ ref: TabRef) -> String {
         if let name = customName(ref) { return name }
-        guard let w = window(ref) else { return "Shell" }
+        guard window(ref) != nil else { return "Shell" }
         if let pane = focusedPane(in: ref) {
             if let cmd = pane.runningCommand?.command, !cmd.isEmpty { return cmd }
             if !pane.cwd.isEmpty {
-                if let home = server(ref.serverId)?.home, pane.cwd == home { return "~" }
+                if pane.cwd == pane.shell.home { return "~" }
                 return (pane.cwd as NSString).lastPathComponent
             }
             if !pane.title.isEmpty { return pane.title }
         }
-        _ = w
         return "Shell"
     }
 
@@ -664,6 +724,7 @@ final class WindowState {
             isEmpty = true
             return
         }
+        isEmpty = false
         let all = tabs
         if let sel = selectedTab, all.contains(sel) { return }
         selectedTab = all.first

@@ -52,6 +52,7 @@ public final class UnixWebSocket: @unchecked Sendable {
 
     deinit {
         readSource?.cancel()
+        continuation.finish()
     }
 
     /// Connect to a Rex endpoint, then upgrade `GET path` to a WebSocket.
@@ -97,15 +98,20 @@ public final class UnixWebSocket: @unchecked Sendable {
             throw error
         }
 
-        // Read the HTTP response head.
+        // Read the HTTP response head. A peer that accepts but never answers
+        // must not hang the connection attempt forever.
+        setReceiveTimeout(fd, seconds: 20)
+        defer { setReceiveTimeout(fd, seconds: 0) }
         var head = Data()
         var chunk = [UInt8](repeating: 0, count: 4096)
         let terminator = Data("\r\n\r\n".utf8)
         while head.range(of: terminator) == nil {
             let n = read(fd, &chunk, chunk.count)
+            if n < 0, errno == EINTR { continue }
             if n <= 0 {
+                let timedOut = n < 0 && errno == EAGAIN
                 Darwin.close(fd)
-                throw Failure.handshake("server closed during handshake")
+                throw Failure.handshake(timedOut ? "no answer from the server" : "server closed during handshake")
             }
             head.append(contentsOf: chunk[0..<n])
             if head.count > 64 * 1024 {
@@ -168,6 +174,11 @@ public final class UnixWebSocket: @unchecked Sendable {
         }
     }
 
+    private static func setReceiveTimeout(_ fd: Int32, seconds: Int) {
+        var tv = timeval(tv_sec: seconds, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    }
+
     static func frame(opcode: UInt8, payload: Data) -> Data {
         var out = Data()
         out.append(0x80 | opcode)
@@ -199,6 +210,11 @@ public final class UnixWebSocket: @unchecked Sendable {
                 let n = write(fd, raw.baseAddress! + offset, raw.count - offset)
                 if n < 0 {
                     if errno == EINTR { continue }
+                    if errno == EAGAIN {
+                        // The send buffer is full (TCP send timeout): wait for room rather than give up.
+                        var p = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                        if poll(&p, 1, 15_000) > 0 { continue }
+                    }
                     throw Failure.socket(String(cString: strerror(errno)))
                 }
                 offset += n

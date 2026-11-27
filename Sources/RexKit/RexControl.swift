@@ -89,6 +89,8 @@ public actor RexControl {
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
     private var nextID = 1
     private var readTask: Task<Void, Never>?
+    /// Counts connections, so a finished one can't tear down its successor.
+    private var generation = 0
 
     public init(address: RexServerAddress = .personal, client: RexClientInfo) {
         self.address = address
@@ -101,7 +103,12 @@ public actor RexControl {
     public func connect() async throws -> Welcome {
         let ws = try await UnixWebSocket.connect(
             endpoint: address.endpoint, path: "/api/control", subprotocol: "rex.control.v1")
+        // Requests still waiting on the previous connection will never be answered.
+        socket?.close()
+        failPending()
         socket = ws
+        generation += 1
+        let generation = generation
         var hello: [String: JSONValue] = [
             "type": "hello",
             "client": try JSONValue.from(client),
@@ -131,9 +138,9 @@ public actor RexControl {
                     guard case .text(let text) = message else { continue }
                     await self?.handle(text)
                 }
-                await self?.connectionEnded(nil)
+                await self?.connectionEnded(generation)
             } catch {
-                await self?.connectionEnded(error)
+                await self?.connectionEnded(generation)
             }
         }
         _ = iterator
@@ -185,11 +192,16 @@ public actor RexControl {
         }
     }
 
-    private func connectionEnded(_ error: Error?) {
+    private func connectionEnded(_ ended: Int) {
+        guard ended == generation else { return }
+        failPending()
+        socket = nil
+        eventContinuation.yield(RexEvent(seq: -1, payload: ["type": "swiftty_disconnected"]))
+    }
+
+    private func failPending() {
         let waiting = pending
         pending.removeAll()
         for (_, cont) in waiting { cont.resume(throwing: RexError.closed) }
-        socket = nil
-        eventContinuation.yield(RexEvent(seq: -1, payload: ["type": "swiftty_disconnected"]))
     }
 }
